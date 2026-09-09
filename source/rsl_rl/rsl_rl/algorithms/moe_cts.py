@@ -53,7 +53,14 @@ class MoECTS:
         symmetry_cfg: dict | None = None,
         # Distributed training parameters
         multi_gpu_cfg: dict | None = None,
+        # Newer Isaac Lab config fields: accept only the original algorithm's behavior.
+        optimizer: str = "adam",
+        share_cnn_encoders: bool = False,
     ) -> None:
+        if optimizer != "adam":
+            raise ValueError("MoECTS only supports optimizer='adam', preserving the original Adam optimizers.")
+        if share_cnn_encoders is not False:
+            raise ValueError("MoECTS only supports share_cnn_encoders=False; CNN encoder sharing is not implemented.")
         assert isinstance(policy, ActorCriticMoECTS), "Policy must be an instance of ActorCriticMoECTS."
         assert not policy.is_recurrent, "Recurrent policies are not supported yet for MoECTS."
         # Device-related parameters
