@@ -72,10 +72,15 @@ class X5RewardsCfg(RewardsCfg):
         # Inherit Legbot's raw physical-value penalty functions unchanged.
         # Only select the corresponding X5 joints (12 legs + 4 wheels).
         for term in (self.joint_acc_l2, self.joint_power, self.joint_torques_l2):
+            # Derived reward experiments may replace a combined term with
+            # separate leg/wheel terms and disable the original using None.
+            if term is None:
+                continue
             term.params["asset_cfg"] = SceneEntityCfg(
                 "robot", joint_names=X5_JOINT_NAMES, preserve_order=True,
             )
-        self.joint_torques_l2.weight = -1.0e-4 / 2.5
+        if self.joint_torques_l2 is not None:
+            self.joint_torques_l2.weight = -1.0e-4 / 2.5
         self.base_height_l2.params["target_height"] = BASE_HEIGHT_TARGET
         self.undesired_contacts.params["sensor_cfg"] = SceneEntityCfg(
             "contact_forces", body_names=".*_(thigh|calf)",

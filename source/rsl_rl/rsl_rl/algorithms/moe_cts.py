@@ -240,9 +240,15 @@ class MoECTS:
         # RND loss
         mean_rnd_loss = 0 if self.rnd else None
 
-        # Get mini batch generator
-        generator = self.storage.mini_batch_generator(self.num_mini_batches, self.num_learning_epochs)
-        data = list(generator)
+        # Keep only the permutation, not every epoch's copied GPU batches.
+        # Both phases replay the same samples, with all PPO updates completed
+        # before student distillation, matching the original update order.
+        batch_indices = self.storage.mini_batch_indices()
+
+        def batches():
+            return self.storage.mini_batch_generator(
+                self.num_mini_batches, self.num_learning_epochs, indices=batch_indices,
+            )
 
         # Iterate over batches
         teacher_samples = self.teacher_num_envs * self.storage.num_transitions_per_env // self.num_mini_batches
@@ -258,7 +264,7 @@ class MoECTS:
             old_sigma_batch,
             hidden_states_batch,
             masks_batch,
-        ) in data:
+        ) in batches():
             original_batch_size = obs_batch.batch_size[0]
 
             # Check if we should normalize advantages per mini batch
@@ -395,7 +401,7 @@ class MoECTS:
             old_sigma_batch,
             hidden_states_batch,
             masks_batch,
-        ) in data:
+        ) in batches():
             # Student encoder loss
             obs_a_batch = self.policy.get_actor_obs(obs_batch)
             obs_a_batch = self.policy.actor_obs_normalizer(obs_a_batch)

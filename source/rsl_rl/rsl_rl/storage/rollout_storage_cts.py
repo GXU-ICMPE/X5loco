@@ -11,7 +11,6 @@ from tensordict import TensorDict
 
 from rsl_rl.networks import HiddenState
 from rsl_rl.utils import split_and_pad_trajectories
-from functools import partial
 
 class RolloutStorageCTS:
     """Storage for the data collected during a rollout.
@@ -126,8 +125,20 @@ class RolloutStorageCTS:
         for i in range(self.num_transitions_per_env):
             yield self.observations[i], self.actions[i], self.privileged_actions[i], self.dones[i]
 
+    def mini_batch_indices(self) -> tuple[torch.Tensor, torch.Tensor]:
+        """One environment-major permutation, shared by PPO and distillation."""
+        teacher_samples = self.teacher_num_envs * self.num_transitions_per_env
+        student_samples = self.student_num_envs * self.num_transitions_per_env
+        return (
+            torch.randperm(teacher_samples, device=self.device),
+            teacher_samples + torch.randperm(student_samples, device=self.device),
+        )
+
     # For reinforcement learning with feedforward networks
-    def mini_batch_generator(self, num_mini_batches: int, num_epochs: int = 8) -> Generator:
+    def mini_batch_generator(
+        self, num_mini_batches: int, num_epochs: int = 8,
+        *, indices: tuple[torch.Tensor, torch.Tensor] | None = None,
+    ) -> Generator:
         if self.training_type != "rl":
             raise ValueError("This function is only available for reinforcement learning training.")
         
@@ -136,46 +147,33 @@ class RolloutStorageCTS:
         student_samples_num = self.student_num_envs * self.num_transitions_per_env
         teacher_mini_batch_size = teacher_samples_num // num_mini_batches
         student_mini_batch_size = student_samples_num // num_mini_batches
-        teacher_indices = torch.randperm(teacher_samples_num, requires_grad=False, device=self.device)
-        student_indices = teacher_samples_num + torch.randperm(student_samples_num, requires_grad=False, device=self.device)
-        
-        # Core
-        observations = self.observations.transpose(0, 1).flatten(0, 1)
-        actions = self.actions.transpose(0, 1).flatten(0, 1)
-        values = self.values.transpose(0, 1).flatten(0, 1)
-        returns = self.returns.transpose(0, 1).flatten(0, 1)
-
-        # For PPO
-        old_actions_log_prob = self.actions_log_prob.transpose(0, 1).flatten(0, 1)
-        advantages = self.advantages.transpose(0, 1).flatten(0, 1)
-        old_mu = self.mu.transpose(0, 1).flatten(0, 1)
-        old_sigma = self.sigma.transpose(0, 1).flatten(0, 1)
-        
-        def _get_teacher_student_samples(data, slice):
-            (i1, i2), (j1, j2) = slice
-            return torch.cat([data[teacher_indices[i1:i2]], data[student_indices[j1:j2]]], 0).detach()
+        teacher_indices, student_indices = self.mini_batch_indices() if indices is None else indices
 
         for epoch in range(num_epochs):
             for i in range(num_mini_batches):
-                # Select the indices for the mini-batch
-                slice = (
-                    (i * teacher_mini_batch_size, (i+1) * teacher_mini_batch_size),
-                    (i * student_mini_batch_size, (i+1) * student_mini_batch_size),
-                )
-                
-                # Create the mini-batch
-                get_batch = partial(_get_teacher_student_samples, slice=slice)
+                # Gather just this batch from [time, env, ...]. Transposing and
+                # flattening the full rollout copies every observation tensor.
+                batch_indices = torch.cat((
+                    teacher_indices[i * teacher_mini_batch_size:(i + 1) * teacher_mini_batch_size],
+                    student_indices[i * student_mini_batch_size:(i + 1) * student_mini_batch_size],
+                ))
+                time_ids = batch_indices % self.num_transitions_per_env
+                env_ids = batch_indices // self.num_transitions_per_env
+
+                def get_batch(data):
+                    return data[time_ids, env_ids].detach()
+
                 obs_batch, actions_batch, target_values_batch, returns_batch, \
                 old_actions_log_prob_batch, advantages_batch, old_mu_batch, \
                 old_sigma_batch = map(get_batch, [
-                    observations,
-                    actions,
-                    values,
-                    returns,
-                    old_actions_log_prob,
-                    advantages,
-                    old_mu,
-                    old_sigma
+                    self.observations,
+                    self.actions,
+                    self.values,
+                    self.returns,
+                    self.actions_log_prob,
+                    self.advantages,
+                    self.mu,
+                    self.sigma,
                 ])
 
                 hidden_state_a_batch = None
