@@ -133,6 +133,7 @@ class LoggerCTS:
             iteration_time = collect_time + learn_time
             self.tot_timesteps += collection_size
             self.tot_time += iteration_time
+            rewards_curriculum_only = self.cfg.get("console_rewards_curriculum_only", False)
 
             # Log episode extras
             extras_string = ""
@@ -153,10 +154,12 @@ class LoggerCTS:
                     value = torch.mean(infotensor)
                     if "/" in key:
                         self.writer.add_scalar(key, value, it)
-                        extras_string += f"""{f"{key}:":>{pad}} {value:.4f}\n"""
+                        if not rewards_curriculum_only or key.startswith(("Episode_Reward/", "Curriculum/")):
+                            extras_string += f"""{f"{key}:":>{pad}} {value:.4f}\n"""
                     else:
                         self.writer.add_scalar("Episode/" + key, value, it)
-                        extras_string += f"""{f"Mean episode {key}:":>{pad}} {value:.4f}\n"""
+                        if not rewards_curriculum_only:
+                            extras_string += f"""{f"Mean episode {key}:":>{pad}} {value:.4f}\n"""
 
             # Log losses
             for key, value in loss_dict.items():
@@ -198,24 +201,27 @@ class LoggerCTS:
                         "Train/mean_student_episode_length/time", statistics.mean(self.student_lenbuffer), int(self.tot_time)
                     )
             # Print to console
-            log_string = f"""{"#" * width}\n"""
-            log_string += f"""\033[1m{f" Learning iteration {it}/{total_it} ".center(width)}\033[0m \n\n"""
+            if rewards_curriculum_only:
+                log_string = f"Learning iteration {it}/{total_it}\n"
+            else:
+                log_string = f"""{"#" * width}\n"""
+                log_string += f"""\033[1m{f" Learning iteration {it}/{total_it} ".center(width)}\033[0m \n\n"""
 
-            # Print run name if provided
-            run_name = self.cfg.get("run_name")
-            log_string += f"""{"Run name:":>{pad}} {run_name}\n""" if run_name else ""
+                # Print run name if provided
+                run_name = self.cfg.get("run_name")
+                log_string += f"""{"Run name:":>{pad}} {run_name}\n""" if run_name else ""
 
-            # Print performance
-            log_string += (
-                f"""{"Total steps:":>{pad}} {self.tot_timesteps} \n"""
-                f"""{"Steps per second:":>{pad}} {fps:.0f} \n"""
-                f"""{"Collection time:":>{pad}} {collect_time:.3f}s \n"""
-                f"""{"Learning time:":>{pad}} {learn_time:.3f}s \n"""
-            )
+                # Print performance
+                log_string += (
+                    f"""{"Total steps:":>{pad}} {self.tot_timesteps} \n"""
+                    f"""{"Steps per second:":>{pad}} {fps:.0f} \n"""
+                    f"""{"Collection time:":>{pad}} {collect_time:.3f}s \n"""
+                    f"""{"Learning time:":>{pad}} {learn_time:.3f}s \n"""
+                )
 
-            # Print losses
-            for key, value in loss_dict.items():
-                log_string += f"""{f"Mean {key} loss:":>{pad}} {value:.4f}\n"""
+                # Print losses
+                for key, value in loss_dict.items():
+                    log_string += f"""{f"Mean {key} loss:":>{pad}} {value:.4f}\n"""
 
             # Print rewards and episode length
             if self.cfg["algorithm"]["rnd_cfg"] and len(self.erewbuffer) > 0:
@@ -223,27 +229,31 @@ class LoggerCTS:
                 log_string += f"""{"Mean intrinsic reward:":>{pad}} {statistics.mean(self.irewbuffer):.2f}\n"""
             if len(self.teacher_rewbuffer) > 0:
                 log_string += f"""{"Mean teacher reward:":>{pad}} {statistics.mean(self.teacher_rewbuffer):.2f}\n"""
-                log_string += f"""{"Mean teacher episode length:":>{pad}} {statistics.mean(self.teacher_lenbuffer):.2f}\n"""
+                if not rewards_curriculum_only:
+                    log_string += f"""{"Mean teacher episode length:":>{pad}} {statistics.mean(self.teacher_lenbuffer):.2f}\n"""
             if len(self.student_rewbuffer) > 0:
                 log_string += f"""{"Mean student reward:":>{pad}} {statistics.mean(self.student_rewbuffer):.2f}\n"""
-                log_string += f"""{"Mean student episode length:":>{pad}} {statistics.mean(self.student_lenbuffer):.2f}\n"""
-            # Print noise std
-            log_string += f"""{"Mean action noise std:":>{pad}} {action_std.mean().item():.2f}\n"""
+                if not rewards_curriculum_only:
+                    log_string += f"""{"Mean student episode length:":>{pad}} {statistics.mean(self.student_lenbuffer):.2f}\n"""
+            if not rewards_curriculum_only:
+                log_string += f"""{"Mean action noise std:":>{pad}} {action_std.mean().item():.2f}\n"""
 
-            # Print episode extras
-            if not print_minimal:
+            # Only console rendering is filtered. All scalar writes above
+            # remain enabled, including diagnostics, losses and performance.
+            if not print_minimal or rewards_curriculum_only:
                 log_string += extras_string
 
             # Print footer
-            done_it = it + 1 - start_it
-            remaining_it = total_it - start_it - done_it
-            eta = self.tot_time / done_it * remaining_it
-            log_string += (
-                f"""{"-" * width}\n"""
-                f"""{"Iteration time:":>{pad}} {iteration_time:.2f}s\n"""
-                f"""{"Time elapsed:":>{pad}} {time.strftime("%H:%M:%S", time.gmtime(self.tot_time))}\n"""
-                f"""{"ETA:":>{pad}} {time.strftime("%H:%M:%S", time.gmtime(eta))}\n"""
-            )
+            if not rewards_curriculum_only:
+                done_it = it + 1 - start_it
+                remaining_it = total_it - start_it - done_it
+                eta = self.tot_time / done_it * remaining_it
+                log_string += (
+                    f"""{"-" * width}\n"""
+                    f"""{"Iteration time:":>{pad}} {iteration_time:.2f}s\n"""
+                    f"""{"Time elapsed:":>{pad}} {time.strftime("%H:%M:%S", time.gmtime(self.tot_time))}\n"""
+                    f"""{"ETA:":>{pad}} {time.strftime("%H:%M:%S", time.gmtime(eta))}\n"""
+                )
             print(log_string)
 
             # Clear extras buffer
